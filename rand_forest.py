@@ -4,13 +4,15 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import cross_val_predict, GridSearchCV, cross_val_score
+
 
 # set random seeds for np
 np.random.seed(123)
 
 
 N_OBSER = 1  # number of observations
-features_set = 4  # feature set (see prep_data_fo_nn.py)
+features_set = 1  # feature set (see prep_data_fo_nn.py)
 scaling = 'min_max'  # how input is scaled
 path_to_project = os.path.dirname(__file__)
 path_to_prep_data = path_to_project + '/prep_data/%s/%d/%d'%(scaling, N_OBSER, features_set)
@@ -42,10 +44,38 @@ y_train = y_train.values
 X_test = X_test.values
 y_test = y_test.values
 
-model = RandomForestRegressor(n_estimators=10,
+# ###################################################################
+# test this code
+# gsc = GridSearchCV(estimator=RandomForestRegressor(),
+#                    param_grid={
+#                        'max_depth': range(10, 100),
+#                        'n_estimators': (10, 50, 100, 1000),
+#                    },
+#                    cv=5,
+#                    scoring='neg_mean_squared_error',
+#                    verbose=0,
+#                    n_jobs=-1)
+#
+# print "fitting model"
+# grid_result = gsc.fit(X_train, y_train)
+# best_params = grid_result.best_params_
+#
+# rfr = RandomForestRegressor(max_depth=best_params["max_depth"],
+#                             n_estimators=best_params["n_estimators"],
+#                             random_state=False,
+#                             verbose=False)
+#
+# scores = cross_val_score(rfr, X_train, y_train, cv=10, scoring='neg_mean_absolute_error')
+#
+# predictions = cross_val_predict(rfr, X, y, cv=10)
+# ###################################################################
+
+
+model = RandomForestRegressor(n_estimators=50,  # number of trees
                               random_state=123,
-                              # max_depth=100,
-                              # min_samples_split=50,
+                              max_depth=100,  # tree depth - number of splits
+                              min_samples_leaf=2,
+                              max_features=3,
                               verbose=1,
                               n_jobs=-1)
 

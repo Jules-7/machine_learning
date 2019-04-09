@@ -7,89 +7,14 @@ from datetime import datetime
 from tensorflow.python.keras.models import Sequential
 from tensorflow.python.keras.layers import Dense, ReLU, LeakyReLU, ELU
 from tensorflow.python.keras.optimizers import Adam
-from tensorflow.python.keras.losses import MeanSquaredError
+from tensorflow.python.keras.losses import mse
 from tensorflow.python.keras import backend as K
 from tensorflow.python.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.python.keras.layers.normalization import BatchNormalization
 
-start_time = datetime.now()
-
 # set random seeds for np and tf
 np.random.seed(123)
 tf.set_random_seed(123)
-
-# ### READ DATA #####################################################
-N_OBSER = 1  # number of observations
-features_set = 3  # feature set (see prep_data_fo_nn.py)
-scaling = 'min_max'  # how input is scaled
-path_to_project = os.path.dirname(__file__)
-path_to_prep_data = path_to_project + '/prep_data/%s/%d/%d'%(scaling, N_OBSER, features_set)
-
-# extract training, test and validation samples
-# and convert them from DataFrame to Numpy arrays
-# since Keras models are trained on Numpy arrays
-X_train, X_test, X_val, y_train, y_test, y_val = None, None, None, None, None, None
-
-for data_file in os.listdir(path_to_prep_data):
-
-    if 'input_train' in data_file:
-        X_train = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-    elif 'input_test' in data_file:
-        X_test = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-    elif 'input_val' in data_file:
-        X_val = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-    elif 'output_train' in data_file:
-        y_train = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-    elif 'output_test' in data_file:
-        y_test = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-    elif 'output_val' in data_file:
-        y_val = pd.read_pickle(path_to_prep_data + '/' + data_file).values
-
-# ###################################################################
-
-# ### INPUT-OUTPUT SETTINGS, MODEL SETTINGS #########################
-# 0.004 is about 1K flights
-# 0.05 is about 13K flights
-data_proportion = 0.05  # select only last X % of training data (e.g. 0.1 is 10%)
-n_samples = int(data_proportion * X_train.shape[0])
-print "Initial training size", X_train.shape[0]
-X_train, y_train = X_train[-n_samples:], y_train[-n_samples:]
-# X_train, X_test, y_train, y_test = X_train[:1000], X_train[-1000:], y_train[:1000], y_train[-1000:]
-print "Reduced training size", X_train.shape[0]
-
-n_features = X_train.shape[1]  # number of inputs - features
-n_outputs = y_train.shape[1]  # number of outputs
-n_hidden1 = 10  # number of hidden neurons in the 1st layer
-n_hidden2 = 500 # number of hidden neurons in the 2nd layer
-n_hidden3 = 150 # number of hidden neurons in the 3rd layer
-n_hidden4 = 10  # number of hidden neurons in the 4th layer
-n_hidden5 = 300  # number of hidden neurons in the 4th layer
-
-learning_rate = 0.00001
-batch_size = 1000
-n_epochs = 1000000
-n_layers = 1  # number of hidden layers
-
-activation_function = 'LeakyReLU'  #  'ReLU'  'LeakyReLU' 'eLU'
-if activation_function == 'LeakyReLU':
-    alpha = 0.01
-else:
-    alpha = 0
-
-weights_init = 'glorot_normal'   # 'he_normal' 'glorot_normal' 'glorot_uniform' 'truncated_normal'
-bias_init = 'zeros'  # 'ones'
-
-ADD_BATCH_NORM = False
-USE_VAL_SET = False  # use validation set while training
-
-checkpoint_path = "models_3/model.h5"
-checkpoint_dir = os.path.dirname(checkpoint_path)
-# ###################################################################
 
 
 # ### AUXILIARY FUNCTIONS ###########################################
@@ -119,209 +44,239 @@ def distance_np(y_true, y_pred):
 # ###################################################################
 
 
-# ### DEFINE NEURAL NETWORK #########################################
-# define model as a linear stack of layers
-model = Sequential()
+class FeedForwardNeuralNet(object):
 
-# all model layers are defined as dense layers
-# --- 1st hidden layer ----------------------------------------------
-# input_shape needs to be specified for the first layer
-# that takes inputs/features
-model.add(Dense(units=n_hidden1,
-                input_shape=(n_features,),
-                use_bias=True,
-                kernel_initializer=weights_init,
-                bias_initializer=bias_init))
+    def __init__(self, X_train, X_test, X_val, y_train, y_test, y_val,
+                 n_features, n_outputs, n_layers, n_hidden, lr, batch, epochs,
+                 activation, alpha=None, weights='glorot_normal',
+                 bias='zeros', loss='mse', batch_norm=False, cp_path=None, cp_dir=None):
+        self.X_train = X_train
+        self.X_test = X_test
+        self.X_val = X_val
+        self.y_train = y_train
+        self.y_test = y_test
+        self.y_val = y_val
+        self.n_features = n_features
+        self.n_outputs = n_outputs
+        self.n_layers = n_layers  # number of hidden layers
+        self.n_hidden = n_hidden  # neurons per each hidden layer
+        self.lr = lr  # learning rate
+        self.batch_size = batch
+        self.epochs = epochs
+        self.activation = activation
+        self.alpha = alpha  # used for LeakyReLU activation
+        self.weights_init = weights
+        self.bias_init = bias
+        self.loss = loss
+        self.batch_norm = batch_norm
+        self.cp_path = cp_path  # checkpoint path
+        self.cp_dir = cp_dir  # checkpoint dir
 
-if ADD_BATCH_NORM:
-    # add Batch Normalization
-    model.add(BatchNormalization())
+    def create_model(self):
+        """ DEFINE NEURAL NETWORK """
+        # define model as a linear stack of dense layers
+        self.model = Sequential()
 
-# add the activation layer explicitly
-if activation_function == 'LeakyReLU':
-    model.add(LeakyReLU(alpha=alpha))  # for x < 0, y = alpha*x -> non-zero slope in the negative region
-elif activation_function == 'ReLU':
-    model.add(ReLU())
-elif activation_function == 'eLU':
-    model.add(ELU())
-# -------------------------------------------------------------------
+        # iteratively add hidden layers
+        for layer_n in range(1, self.n_layers+1):
+            print layer_n, "hidden layer\n",
+            if layer_n == 1:  # input_shape needs to be specified for the first layer
+                self.model.add(Dense(units=self.n_hidden[layer_n], input_shape=(self.n_features,),
+                                     kernel_initializer=self.weights_init, bias_initializer=self.bias_init))
+            else:
+                self.model.add(Dense(units=self.n_hidden[layer_n], kernel_initializer=self.weights_init,
+                                     bias_initializer=self.bias_init))
 
-if n_layers >= 2:
-    print "adding 2nd hidden layer"
-    # --- 2nd hidden layer ----------------------------------------------
-    model.add(Dense(units=n_hidden2,
-                    use_bias=True,
-                    kernel_initializer=weights_init,
-                    bias_initializer=bias_init))
+            if self.batch_norm:
+                self.model.add(BatchNormalization())  # add batch normalization before activation
 
-    if ADD_BATCH_NORM:
-        model.add(BatchNormalization())
+            # add the activation layer explicitly
+            if self.activation == 'LeakyReLU':
+                self.model.add(LeakyReLU(alpha=self.alpha))  # for x < 0, y = alpha*x -> non-zero slope in the negative region
 
-    if activation_function == 'LeakyReLU':
-        model.add(LeakyReLU(alpha=alpha))
-    elif activation_function == 'ReLU':
-        model.add(ReLU())
-    elif activation_function == 'eLU':
-        model.add(ELU())
-    # -------------------------------------------------------------------
+            elif self.activation == 'ReLU':
+                self.model.add(ReLU())
 
-if n_layers >= 3:
-    print "adding 3rd hidden layer"
-    # --- 3rd hidden layer ----------------------------------------------
-    model.add(Dense(units=n_hidden3,
-                    use_bias=True,
-                    kernel_initializer=weights_init,
-                    bias_initializer=bias_init))
+            elif self.activation == 'eLU':
+                self.model.add(ELU())
 
-    if ADD_BATCH_NORM:
-        model.add(BatchNormalization())
+        # add output layer; no activation for the output layer
+        self.model.add(Dense(units=self.n_outputs, kernel_initializer=self.weights_init,
+                             bias_initializer=self.bias_init))
 
-    if activation_function == 'LeakyReLU':
-        model.add(LeakyReLU(alpha=alpha))
-    elif activation_function == 'ReLU':
-        model.add(ReLU())
-    elif activation_function == 'eLU':
-        model.add(ELU())
-    # -------------------------------------------------------------------
+    def compile_model(self):
 
-if n_layers >= 4:
-    print "adding 4th hidden layer"
-    # --- 4th hidden layer ----------------------------------------------
-    model.add(Dense(units=n_hidden4,
-                    use_bias=True,
-                    kernel_initializer=weights_init,
-                    bias_initializer=bias_init))
+        optimizer = Adam(lr=self.lr)  # hardcoded Adam optimizer
 
-    if ADD_BATCH_NORM:
-        model.add(BatchNormalization())
+        # configure the model learning process
+        self.model.compile(optimizer=optimizer, loss=self.loss, metrics=[dist])
 
-    if activation_function == 'LeakyReLU':
-        model.add(LeakyReLU(alpha=alpha))
-    elif activation_function == 'ReLU':
-        model.add(ReLU())
-    elif activation_function == 'eLU':
-        model.add(ELU())
-    # -------------------------------------------------------------------
+    def set_callback(self):
+        # checkpoint to store model weights
+        self.checkpoint = ModelCheckpoint(self.cp_path, verbose=1, monitor='loss',
+                                          save_weights_only=True, mode='min')
 
-if n_layers >= 5:
-    print "adding 5th hidden layer"
-    # --- 5th hidden layer ----------------------------------------------
-    model.add(Dense(units=n_hidden4,
-                    use_bias=True,
-                    kernel_initializer=weights_init,
-                    bias_initializer=bias_init))
+        self.early_stop = EarlyStopping(monitor='val_loss', mode='min', patience=100, verbose=1)
 
-    if ADD_BATCH_NORM:
-        model.add(BatchNormalization())
+    def train_model(self):
+        # train the model iterating data in batches and
+        # storing the training and validation loss and metrics for each epoch
+        start_time = datetime.now()
+        if self.X_val:
+            self.history = self.model.fit(self.X_train, self.y_train, batch_size=self.batch_size,
+                                     epochs=self.epochs, verbose=1,
+                                     callbacks=[self.checkpoint, self.early_stop],
+                                     validation_data=(self.X_val, self.y_val))
+        else:
+            self.history = self.model.fit(self.X_train, self.y_train, batch_size=self.batch_size,
+                                     epochs=self.epochs, verbose=1,
+                                     callbacks=[self.checkpoint, self.early_stop],
+                                     validation_split=0.1)
+        print "training time", datetime.now() - start_time, '\n'
 
-    if activation_function == 'LeakyReLU':
-        model.add(LeakyReLU(alpha=alpha))
-    elif activation_function == 'ReLU':
-        model.add(ReLU())
-    elif activation_function == 'eLU':
-        model.add(ELU())
-    # -------------------------------------------------------------------
+    def predict(self):
+        # compute average distance error on the training and validation set
+        y_hat_train = self.model.predict(self.X_train, verbose=0)
+        # y_hat_test = self.model.predict(self.X_test, verbose=0)
 
-# --- output layer --------------------------------------------------
-# no activation for the output layer
-model.add(Dense(units=n_outputs,
-                use_bias=True,
-                kernel_initializer=weights_init,
-                bias_initializer=bias_init))
-# -------------------------------------------------------------------
+        dist_train = distance_np(y_train, y_hat_train)
+        # dist_test = distance_np(y_test, y_hat_test)
 
-optimizer = Adam(lr=learning_rate)
+        print "average distance on the training set", np.round(dist_train, 3)
+        # print "average distance on the test set", np.round(dist_test, 3)
 
-loss = MeanSquaredError()
+        if self.X_val:
+            y_hat_val = self.model.predict(self.X_val, verbose=0)
+            dist_val = distance_np(y_val, y_hat_val)
+            print "average distance on the validation set", np.round(dist_val, 3)
 
-# configure the model learning process
-model.compile(optimizer=optimizer, loss=loss, metrics=[dist, rmse])
+    def model_structure(self):
+        print "\nPrinting model structure:\n"
+        print "learning rate\t", self.lr
+        print "batch size\t\t", self.batch_size
+        print "epochs\t\t\t\t", self.epochs
+        print "layers\t\t\t", self.n_layers
+        print "neurons in each layer\t", self.n_hidden
+        print "activation function\t", self.activation
+        print "weights initialization\t", self.weights_init
+        print "bias initialization\t", self.bias_init
+        print "batch normalization\t", self.batch_norm
+        print N_OBSER, "observ, feature set", features_set,
 
-cp_callback = ModelCheckpoint(checkpoint_path,
-                              verbose=1,
-                              monitor='loss',
-                              save_best_only=True,
-                              mode='min')
-# ###################################################################
+    def summarize_history(self):
+        # summarize history for loss
+        plt.plot(self.history.history['loss'])
+        plt.plot(self.history.history['val_loss'])
+        plt.legend(['train', 'valid'], loc='upper left')
+        plt.title('model loss')
+        plt.ylabel('loss')
+        plt.xlabel('epoch')
+        plt.show()
 
-# ### TRAIN NEURAL NETWORK ##########################################
-# train the model, iterating the data in batches and
-# displaying the training (and validation) loss and metrics for each epoch
-if USE_VAL_SET:
-    early_stop_callback = EarlyStopping(monitor='val_loss', mode='min', patience=100, verbose=1)
-    history = model.fit(X_train, y_train, batch_size=batch_size, epochs=n_epochs,
-                        verbose=1,
-                        callbacks=[cp_callback, early_stop_callback],
-                        # validation_split=0.1
-                        validation_data=(X_val, y_val)
-                        )
-else:
-    early_stop_callback = EarlyStopping(monitor='loss', mode='min', patience=100, verbose=1)
-    history = model.fit(X_train, y_train, batch_size=batch_size,
-                        callbacks=[early_stop_callback], epochs=n_epochs, verbose=1)
-# ###################################################################
+        # # summarize history for rmse
+        # plt.plot(history.history['rmse'])
+        # if USE_VAL_SET:
+        #     plt.plot(history.history['val_rmse'])
+        # plt.title('model rmse')
+        # plt.ylabel('rmse')
+        # plt.xlabel('epoch')
+        # if USE_VAL_SET:
+        #     plt.legend(['train', 'valid'], loc='upper left')
+        # else:
+        #     plt.legend(['train'], loc='upper left')
+        # plt.show()
+        #
+        # summarize history for distance
+        plt.plot(self.history.history['dist'])
+        plt.plot(self.history.history['val_dist'])
+        plt.title('model dist')
+        plt.ylabel('dist')
+        plt.xlabel('epoch')
+        plt.legend(['train', 'valid'], loc='upper left')
+        plt.show()
 
-# ### PREDICTION AND EVALUATION #####################################
-# compute average distance error on the training set
-# and validation set
-y_hat_train = model.predict(X_train, verbose=0)
-y_hat_val = model.predict(X_val, verbose=0)
-# y_hat_test = model.predict(X_test, verbose=0)
 
-dist_train = distance_np(y_train, y_hat_train)
-dist_val = distance_np(y_val, y_hat_val)
-# dist_test = distance_np(y_test, y_hat_test)
+if __name__ == "__main__":
 
-print "average distance on the training set", np.round(dist_train, 3)
-print "average distance on the validation set", np.round(dist_val, 3)
-# print "average distance on the test set", np.round(dist_test, 3)
+    # ### READ DATA #####################################################
+    N_OBSER = 1  # number of observations
+    features_set = 2  # feature set (see prep_data_fo_nn.py)
+    scaling = 'min_max'  # how input is scaled
+    path_to_project = os.path.dirname(__file__)
+    path_to_prep_data = path_to_project + '/prep_data/%s/%d/%d' % (scaling, N_OBSER, features_set)
 
-print "learning rate", learning_rate
-print "batch size", batch_size
-print "epochs", n_epochs
-print "layers", n_layers
-print "neurons in each layer", n_hidden1, n_hidden2, n_hidden3, n_hidden4, n_hidden5
-print "activation function", activation_function
-print "weights initialization", weights_init
-print "bias initialization", bias_init
+    # extract training, test and validation samples
+    # and convert them from DataFrame to Numpy arrays
+    # since Keras models are trained on Numpy arrays
+    X_train, X_test, X_val, y_train, y_test, y_val = None, None, None, None, None, None
 
-print "training time", datetime.now() - start_time
+    for data_file in os.listdir(path_to_prep_data):
 
-# summarize history for loss
-plt.plot(history.history['loss'])
-if USE_VAL_SET:
-    plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-if USE_VAL_SET:
-    plt.legend(['train', 'valid'], loc='upper left')
-else:
-    plt.legend(['train'], loc='upper left')
-plt.show()
+        if 'input_train' in data_file:
+            X_train = pd.read_pickle(path_to_prep_data + '/' + data_file).values
 
-# summarize history for rmse
-plt.plot(history.history['rmse'])
-if USE_VAL_SET:
-    plt.plot(history.history['val_rmse'])
-plt.title('model rmse')
-plt.ylabel('rmse')
-plt.xlabel('epoch')
-if USE_VAL_SET:
-    plt.legend(['train', 'valid'], loc='upper left')
-else:
-    plt.legend(['train'], loc='upper left')
-plt.show()
+        elif 'input_test' in data_file:
+            X_test = pd.read_pickle(path_to_prep_data + '/' + data_file).values
 
-# summarize history for distance
-plt.plot(history.history['dist'])
-if USE_VAL_SET:
-    plt.plot(history.history['val_dist'])
-plt.title('model dist')
-plt.ylabel('dist')
-plt.xlabel('epoch')
-if USE_VAL_SET:
-    plt.legend(['train', 'valid'], loc='upper left')
-else:
-    plt.legend(['train'], loc='upper left')
-plt.show()
+        elif 'input_val' in data_file:
+            X_val = pd.read_pickle(path_to_prep_data + '/' + data_file).values
+
+        elif 'output_train' in data_file:
+            y_train = pd.read_pickle(path_to_prep_data + '/' + data_file).values
+
+        elif 'output_test' in data_file:
+            y_test = pd.read_pickle(path_to_prep_data + '/' + data_file).values
+
+        elif 'output_val' in data_file:
+            y_val = pd.read_pickle(path_to_prep_data + '/' + data_file).values
+
+    # ###################################################################
+
+    # ### INPUT-OUTPUT SETTINGS, MODEL SETTINGS #########################
+    # 0.004 is about 1K flights
+    # 0.05 is about 13K flights
+    data_proportion = 1  # select only last X % of training data (e.g. 0.1 is 10%)
+    n_samples = int(data_proportion * X_train.shape[0])
+    print "Initial training size", X_train.shape[0]
+    X_train, y_train = X_train[-n_samples:], y_train[-n_samples:]
+    # X_train, X_test, y_train, y_test = X_train[:1000], X_train[-1000:], y_train[:1000], y_train[-1000:]
+    print "Reduced training size", X_train.shape[0]
+
+    n_features = X_train.shape[1]  # number of inputs - features
+    n_outputs = y_train.shape[1]  # number of outputs
+    # number of hidden neurons per layer
+    n_hidden = {1: 10,
+                2: 5,
+                3: 100,
+                4: 10,
+                5: 300}
+
+    learning_rate = 0.00001
+    n_layers = 1  # number of hidden layers
+
+    #weights_init options # 'he_normal'  # 'glorot_normal'  'glorot_uniform' 'truncated_normal'
+
+    checkpoint_path = "weights/model_weights.h5"
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    # ###################################################################
+
+    fnn = FeedForwardNeuralNet(X_train=X_train, X_test=None, X_val=None,
+                               y_train=y_train, y_test=None, y_val=None,
+                               n_features=n_features, n_outputs=n_outputs,
+                               n_layers=n_layers, n_hidden=n_hidden,
+                               lr=learning_rate, batch=1000,
+                               epochs=100, activation='LeakyReLU',
+                               alpha=0.01, weights='glorot_normal',
+                               bias='zeros', loss=mse, batch_norm=False,
+                               cp_path=checkpoint_path, cp_dir=checkpoint_dir)
+
+    fnn.create_model()
+    fnn.compile_model()
+    fnn.set_callback()
+    fnn.train_model()
+    fnn.model.save('models/model.h5')  # save complete model
+    fnn.predict()
+    fnn.summarize_history()
+    fnn.model_structure()
+
+
